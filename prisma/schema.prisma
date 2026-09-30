@@ -13,3 +13,58 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum Role {
+  FIELD_NURSE
+  LAB_ANALYST
+  COMPLIANCE_AUDITOR
+}
+
+enum SampleStatus {
+  COLLECTED
+  IN_TRANSIT
+  LAB_RECEIVED
+  ANALYSIS_COMPLETE
+  STORED
+  COMPROMISED
+}
+
+model User {
+  id        String         @id @default(uuid())
+  email     String         @unique
+  password  String
+  role      Role
+  createdAt DateTime       @default(now())
+  events    CustodyEvent[]
+}
+
+model Sample {
+  id        String               @id @default(uuid())
+  code      String               @unique
+  status    SampleStatus         @default(COLLECTED)
+  minTemp   Float
+  maxTemp   Float
+  createdAt DateTime             @default(now())
+  readings  TemperatureReading[]
+  events    CustodyEvent[]
+}
+
+model TemperatureReading {
+  id         String   @id @default(uuid())
+  sampleId   String
+  sample     Sample   @relation(fields: [sampleId], references: [id])
+  value      Float
+  recordedAt DateTime @default(now())
+}
+
+model CustodyEvent {
+  id         String        @id @default(uuid())
+  sampleId   String
+  sample     Sample        @relation(fields: [sampleId], references: [id])
+  fromStatus SampleStatus?
+  toStatus   SampleStatus
+  actorId    String?
+  actor      User?         @relation(fields: [actorId], references: [id])
+  note       String?
+  createdAt  DateTime      @default(now())
+}
