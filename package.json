@@ -19,8 +19,8 @@
     "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:debug": "node --inspect-brk --experimental-vm-modules -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "dotenv -e .env.test -- node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand",
-    "test:e2e:setup": "dotenv -e .env.test -- prisma migrate deploy"
+    "test:e2e": "npx dotenv-cli -e .env.test -- node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand",
+    "test:e2e:setup": "npx dotenv-cli -e .env.test -- prisma migrate deploy"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
