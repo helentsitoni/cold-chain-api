@@ -14,6 +14,7 @@ const FLOW: SampleStatus[] = [
 ];
 
 async function main() {
+  await prisma.alert.deleteMany();  
   await prisma.custodyEvent.deleteMany();
   await prisma.temperatureReading.deleteMany();
   await prisma.sample.deleteMany();

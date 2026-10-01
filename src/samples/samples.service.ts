@@ -1,19 +1,25 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import {
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Queue } from 'bullmq';
 import { AuthUser } from '../auth/auth-user';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreateReadingDto } from './dto/create-reading.dto';
 import { CreateSampleDto } from './dto/create-sample.dto';
 import { TransitionDto } from './dto/transition.dto';
+import { ESCALATION_QUEUE } from './escalation.processor';
 import { TRANSITIONS } from './state-machine';
-import { CreateReadingDto } from './dto/create-reading.dto';.0
 
 @Injectable()
 export class SamplesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @InjectQueue(ESCALATION_QUEUE) private escalationQueue: Queue,
+  ) {}
 
   async create(dto: CreateSampleDto, user: AuthUser) {
     const existing = await this.prisma.sample.findUnique({
@@ -84,9 +90,23 @@ export class SamplesService {
         },
       }),
     ]);
+
+    if (dto.toStatus === 'IN_TRANSIT') {
+      await this.escalationQueue.add(
+        'check-transit',
+        { sampleId: id },
+        {
+          delay: Number(process.env.ESCALATION_DELAY_MS ?? 86_400_000),
+          jobId: `transit-${id}`,
+          removeOnComplete: true,
+        },
+      );
+    }
+
     return updated;
   }
-    async addReading(id: string, dto: CreateReadingDto) {
+
+  async addReading(id: string, dto: CreateReadingDto) {
     const sample = await this.findOne(id);
     if (sample.status !== 'IN_TRANSIT') {
       throw new ConflictException(

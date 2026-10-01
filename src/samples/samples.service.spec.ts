@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { SamplesService } from './samples.service';
@@ -23,6 +24,7 @@ const sample = (status: string) => ({
 
 describe('SamplesService', () => {
   let service: SamplesService;
+  let queue: { add: jest.Mock };
   let prisma: {
     sample: { findUnique: jest.Mock; update: jest.Mock; create: jest.Mock };
     custodyEvent: { create: jest.Mock };
@@ -31,6 +33,7 @@ describe('SamplesService', () => {
   };
 
   beforeEach(async () => {
+    queue = { add: jest.fn() };
     prisma = {
       sample: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
       custodyEvent: { create: jest.fn() },
@@ -39,14 +42,18 @@ describe('SamplesService', () => {
     };
 
     const moduleRef = await Test.createTestingModule({
-      providers: [SamplesService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        SamplesService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: getQueueToken('escalation'), useValue: queue },
+      ],
     }).compile();
 
     service = moduleRef.get(SamplesService);
   });
 
   describe('transition', () => {
-    it('lets a nurse move COLLECTED to IN_TRANSIT and writes an event', async () => {
+    it('lets a nurse move COLLECTED to IN_TRANSIT, writes an event and schedules escalation', async () => {
       prisma.sample.findUnique.mockResolvedValue(sample('COLLECTED'));
       prisma.sample.update.mockResolvedValue(sample('IN_TRANSIT'));
 
@@ -60,6 +67,20 @@ describe('SamplesService', () => {
           actorId: 'nurse-1',
         }),
       });
+      expect(queue.add).toHaveBeenCalledWith(
+        'check-transit',
+        { sampleId: 's1' },
+        expect.objectContaining({ jobId: 'transit-s1' }),
+      );
+    });
+
+    it('does not schedule escalation for other transitions', async () => {
+      prisma.sample.findUnique.mockResolvedValue(sample('IN_TRANSIT'));
+      prisma.sample.update.mockResolvedValue(sample('LAB_RECEIVED'));
+
+      await service.transition('s1', { toStatus: 'LAB_RECEIVED' }, lab);
+
+      expect(queue.add).not.toHaveBeenCalled();
     });
 
     it('rejects skipping a step with 409', async () => {

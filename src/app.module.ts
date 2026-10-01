@@ -1,12 +1,23 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { PrismaModule } from './prisma/prisma.module';
 import { SamplesModule } from './samples/samples.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, SamplesModule],
+  imports: [
+    BullModule.forRoot({
+      connection: {
+        host: process.env.REDIS_HOST ?? 'localhost',
+        port: Number(process.env.REDIS_PORT ?? 6379),
+      },
+    }),
+    PrismaModule,
+    AuthModule,
+    SamplesModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -22,6 +22,7 @@ describe('Cold chain flow (e2e)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    await prisma.alert.deleteMany();
     await prisma.custodyEvent.deleteMany();
     await prisma.temperatureReading.deleteMany();
     await prisma.sample.deleteMany();
