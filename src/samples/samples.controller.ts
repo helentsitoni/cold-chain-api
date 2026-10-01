@@ -8,15 +8,17 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import { AuthUser } from '../auth/auth-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { CreateReadingDto } from './dto/create-reading.dto';
 import { CreateSampleDto } from './dto/create-sample.dto';
 import { TransitionDto } from './dto/transition.dto';
 import { SamplesService } from './samples.service';
-import { CreateReadingDto } from './dto/create-reading.dto';
 
+@ApiBearerAuth()
 @Controller('samples')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SamplesController {
@@ -46,7 +48,8 @@ export class SamplesController {
   ) {
     return this.samplesService.transition(id, dto, req.user);
   }
-    @Post(':id/readings')
+
+  @Post(':id/readings')
   @Roles('FIELD_NURSE')
   addReading(@Param('id') id: string, @Body() dto: CreateReadingDto) {
     return this.samplesService.addReading(id, dto);

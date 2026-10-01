@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -27,6 +28,7 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @ApiBearerAuth()
   @Get('me')
   @UseGuards(JwtAuthGuard)
   me(@Req() req: { user: { sub: string; role: string } }) {
