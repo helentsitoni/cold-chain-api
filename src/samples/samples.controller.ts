@@ -15,6 +15,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { CreateSampleDto } from './dto/create-sample.dto';
 import { TransitionDto } from './dto/transition.dto';
 import { SamplesService } from './samples.service';
+import { CreateReadingDto } from './dto/create-reading.dto';
 
 @Controller('samples')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -44,5 +45,10 @@ export class SamplesController {
     @Req() req: { user: AuthUser },
   ) {
     return this.samplesService.transition(id, dto, req.user);
+  }
+    @Post(':id/readings')
+  @Roles('FIELD_NURSE')
+  addReading(@Param('id') id: string, @Body() dto: CreateReadingDto) {
+    return this.samplesService.addReading(id, dto);
   }
 }

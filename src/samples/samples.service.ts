@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateSampleDto } from './dto/create-sample.dto';
 import { TransitionDto } from './dto/transition.dto';
 import { TRANSITIONS } from './state-machine';
+import { CreateReadingDto } from './dto/create-reading.dto';.0
 
 @Injectable()
 export class SamplesService {
@@ -84,5 +85,42 @@ export class SamplesService {
       }),
     ]);
     return updated;
+  }
+    async addReading(id: string, dto: CreateReadingDto) {
+    const sample = await this.findOne(id);
+    if (sample.status !== 'IN_TRANSIT') {
+      throw new ConflictException(
+        'Readings are only accepted while IN_TRANSIT',
+      );
+    }
+
+    const outOfRange =
+      dto.value < sample.minTemp || dto.value > sample.maxTemp;
+
+    if (!outOfRange) {
+      const reading = await this.prisma.temperatureReading.create({
+        data: { sampleId: id, value: dto.value },
+      });
+      return { reading, status: sample.status };
+    }
+
+    const [reading] = await this.prisma.$transaction([
+      this.prisma.temperatureReading.create({
+        data: { sampleId: id, value: dto.value },
+      }),
+      this.prisma.sample.update({
+        where: { id },
+        data: { status: 'COMPROMISED' },
+      }),
+      this.prisma.custodyEvent.create({
+        data: {
+          sampleId: id,
+          fromStatus: 'IN_TRANSIT',
+          toStatus: 'COMPROMISED',
+          note: `Temperature ${dto.value}°C outside ${sample.minTemp}-${sample.maxTemp}°C`,
+        },
+      }),
+    ]);
+    return { reading, status: 'COMPROMISED' };
   }
 }
