@@ -1,124 +1,358 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Cold Chain API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+![CI](https://github.com/helentsitoni/cold-chain-api/actions/workflows/ci.yml/badge.svg)
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+**Live demo:** [cold-chain-api.onrender.com/api](https://cold-chain-api.onrender.com/api) (Swagger UI). Log in with `nurse@demo.com` / `Demo1234!`, `lab@demo.com` or `auditor@demo.com`. The free instance sleeps when idle, so the first request can take up to a minute.
 
-## Description
+A backend REST API for tracking clinical trial biological samples through a temperature-controlled supply chain. It records who handled each sample and when (chain of custody), enforces which role may move a sample to which state, automatically locks a sample if its temperature leaves the allowed range during transport, and alerts a compliance auditor if a sample stays in transit for too long.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Built with **NestJS**, **TypeScript**, **Prisma**, **PostgreSQL** and **BullMQ**.
 
-## Project setup
+---
 
-```bash
-$ npm install
+## Features
+
+- **Authentication** with JWT (register, login, protected routes) and bcrypt password hashing
+- **Role-based access control** with three roles: `FIELD_NURSE`, `LAB_ANALYST`, `COMPLIANCE_AUDITOR`
+- **Sample lifecycle state machine**: invalid transitions are rejected, and each transition is restricted to a specific role
+- **Immutable audit log** (chain of custody): every status change is recorded in the same database transaction as the change itself
+- **Temperature monitoring**: an out-of-range reading during transport automatically marks the sample `COMPROMISED` and blocks any further transitions
+- **Time-based escalation**: when a sample goes `IN_TRANSIT`, a delayed job is queued with BullMQ; if the sample is still in transit after 24 hours, an alert is created for the compliance auditor
+- **Input validation** on every request with DTOs and `class-validator`
+- **Interactive API docs** with Swagger / OpenAPI
+- **Unit and end-to-end tests** with Jest and Supertest, running in **GitHub Actions** on every push
+- **PostgreSQL and Redis in Docker** for local development, with schema migrations managed by Prisma
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Runtime / language | Node.js 20+, TypeScript |
+| Framework | NestJS 12 |
+| ORM | Prisma 6 |
+| Database | PostgreSQL 16 |
+| Background jobs | BullMQ, Redis 7 |
+| Auth | `@nestjs/jwt`, `bcryptjs` |
+| Validation | `class-validator`, `class-transformer` |
+| API docs | `@nestjs/swagger` |
+| Testing | Jest, Supertest |
+| CI | GitHub Actions |
+| Hosting | Render (API, Redis), Neon (PostgreSQL) |
+
+---
+
+## Sample lifecycle
+
+A sample only moves forward, one step at a time, and each step can only be performed by a specific role. The `COMPROMISED` state is set automatically by the system and is final.
+
+```mermaid
+stateDiagram-v2
+    [*] --> COLLECTED: FIELD_NURSE creates sample
+    COLLECTED --> IN_TRANSIT: FIELD_NURSE
+    IN_TRANSIT --> LAB_RECEIVED: LAB_ANALYST
+    LAB_RECEIVED --> ANALYSIS_COMPLETE: LAB_ANALYST
+    ANALYSIS_COMPLETE --> STORED: LAB_ANALYST
+    IN_TRANSIT --> COMPROMISED: temperature out of range (automatic)
+    STORED --> [*]
+    COMPROMISED --> [*]
 ```
 
-## Compile and run the project
+The rules live in [`src/samples/state-machine.ts`](src/samples/state-machine.ts) as data rather than `if/else` logic, so adding a new transition is a one-line change.
 
-```bash
-# development
-$ npm run start
+### Example: temperature rule
 
-# watch mode
-$ npm run start:dev
+Sample `S-002` has an allowed range of 2–8 °C and is `IN_TRANSIT`:
 
-# production mode
-$ npm run start:prod
+1. A reading of **6.4 °C** is within range. It is stored and the sample stays `IN_TRANSIT`.
+2. A reading of **9.1 °C** is above 8 °C. In a single transaction the reading is stored, the sample becomes `COMPROMISED`, and a custody event is written with the note `Temperature 9.1°C outside 2-8°C` and no user as actor.
+3. A lab analyst then tries to move it to `LAB_RECEIVED`. There is no rule out of `COMPROMISED`, so the API returns **409 Conflict**.
+
+### Example: time-based escalation
+
+1. A nurse moves sample `DEMO-005` to `IN_TRANSIT`. The API queues a delayed job `check-transit` in BullMQ, due in 24 hours.
+2. When the job fires, the worker reloads the sample. If it is still `IN_TRANSIT`, it creates an alert: `Sample DEMO-005 has been IN_TRANSIT longer than allowed`.
+3. If the sample was already received in the lab, the job does nothing.
+4. A compliance auditor sees the alert at `GET /alerts`.
+
+The delay is set by `ESCALATION_DELAY_MS`, so locally and in the live demo it can be a few seconds or minutes instead of 24 hours.
+
+---
+
+## Data model
+
+```mermaid
+erDiagram
+    User ||--o{ CustodyEvent : performs
+    Sample ||--o{ CustodyEvent : has
+    Sample ||--o{ TemperatureReading : has
+    Sample ||--o{ Alert : triggers
+
+    User {
+        string id PK
+        string email UK
+        string password "bcrypt hash"
+        Role role
+        datetime createdAt
+    }
+    Sample {
+        string id PK
+        string code UK
+        SampleStatus status
+        float minTemp
+        float maxTemp
+        datetime createdAt
+    }
+    TemperatureReading {
+        string id PK
+        string sampleId FK
+        float value
+        datetime recordedAt
+    }
+    CustodyEvent {
+        string id PK
+        string sampleId FK
+        SampleStatus fromStatus "null on creation"
+        SampleStatus toStatus
+        string actorId FK "null for automatic events"
+        string note
+        datetime createdAt
+    }
+    Alert {
+        string id PK
+        string sampleId FK
+        string message
+        datetime createdAt
+    }
 ```
 
-## Run tests
+---
+
+## Getting started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 20 or later
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (on Windows, with WSL 2)
+
+### 1. Clone and install
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+git clone https://github.com/helentsitoni/cold-chain-api.git
+cd cold-chain-api
+npm install
 ```
 
-## Deployment
+### 2. Configure environment variables
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Copy the example file and adjust the values if needed:
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+cp .env.example .env
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+| Variable | Description | Example |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://app:app@localhost:5433/coldchain` |
+| `JWT_SECRET` | Secret used to sign JWTs. Use a long random string | `change-me-to-a-long-random-string` |
+| `REDIS_HOST` / `REDIS_PORT` | Redis connection for the job queue | `localhost` / `6379` |
+| `ESCALATION_DELAY_MS` | How long a sample may stay `IN_TRANSIT` before an alert. Defaults to 24 hours | `86400000` |
+| `PORT` | Optional. HTTP port, defaults to 3000 | `3000` |
 
-## Observability
+> The database runs on port **5433** on the host to avoid clashing with a locally installed PostgreSQL on 5432.
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project:
+### 3. Start PostgreSQL and Redis
 
 ```bash
-$ npm install @nestjs/observe
+docker compose up -d
 ```
 
-Then follow the [setup guide](https://docs.nestjs.com/observability/overview) - it takes a single import and an app key.
+This starts three containers: the development database (port 5433), a separate test database (port 5434) and Redis (port 6379).
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+### 4. Run the migrations
 
-## Resources
+```bash
+npx prisma migrate dev
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+### 5. Load demo data (optional)
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+```bash
+npm run seed
+```
 
-## Support
+This resets the database and creates 6 sample records in every status, plus three users (password `Demo1234!` for all):
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+| Email | Role |
+| --- | --- |
+| `nurse@demo.com` | `FIELD_NURSE` |
+| `lab@demo.com` | `LAB_ANALYST` |
+| `auditor@demo.com` | `COMPLIANCE_AUDITOR` |
 
-## Stay in touch
+### 6. Start the API
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```bash
+npm run start:dev
+```
 
-## License
+The API is now running on `http://localhost:3000`, and the interactive documentation (Swagger) is at `http://localhost:3000/api`.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+---
+
+## Running tests
+
+```bash
+# Unit tests (no database needed)
+npm test
+
+# End-to-end tests (use the separate test database on port 5434)
+docker compose up -d
+npm run test:e2e:setup
+npm run test:e2e
+```
+
+The same build, unit tests and end-to-end tests run in GitHub Actions on every push to `main`, against PostgreSQL and Redis service containers.
+
+---
+
+## API reference
+
+All endpoints except `register` and `login` require the header:
+
+```
+Authorization: Bearer <access_token>
+```
+
+| Method | Path | Allowed roles | Description |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | Public | Create a user |
+| `POST` | `/auth/login` | Public | Returns an `access_token` (valid for 1 hour) |
+| `GET` | `/auth/me` | Any authenticated user | Returns the user id (`sub`) and `role` from the token |
+| `POST` | `/samples` | `FIELD_NURSE` | Create a sample in `COLLECTED` state |
+| `GET` | `/samples` | Any authenticated user | List samples, newest first |
+| `GET` | `/samples/:id` | Any authenticated user | Get a sample with its custody events and readings |
+| `PATCH` | `/samples/:id/status` | Depends on the transition | Move a sample to a new status |
+| `POST` | `/samples/:id/readings` | `FIELD_NURSE` | Add a temperature reading (only while `IN_TRANSIT`) |
+| `GET` | `/alerts` | `COMPLIANCE_AUDITOR` | List escalation alerts, newest first |
+
+### Example requests
+
+**Register and log in**
+
+```bash
+curl -X POST http://localhost:3000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"nurse@test.com","password":"secret123","role":"FIELD_NURSE"}'
+
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"nurse@test.com","password":"secret123"}'
+# → { "access_token": "eyJhbGciOi..." }
+```
+
+**Create a sample**
+
+```bash
+curl -X POST http://localhost:3000/samples \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"code":"S-001","minTemp":2,"maxTemp":8}'
+```
+
+**Change status**
+
+```bash
+curl -X PATCH http://localhost:3000/samples/<id>/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"toStatus":"IN_TRANSIT","note":"Picked up from site 3"}'
+```
+
+**Add a temperature reading**
+
+```bash
+curl -X POST http://localhost:3000/samples/<id>/readings \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value":6.4}'
+```
+
+### Error responses
+
+| Status | When |
+| --- | --- |
+| `400 Bad Request` | The body fails validation (e.g. invalid email, password under 8 characters, unknown status) |
+| `401 Unauthorized` | Missing, invalid or expired token, or wrong login credentials |
+| `403 Forbidden` | The user's role is not allowed to perform this action or transition |
+| `404 Not Found` | The sample does not exist |
+| `409 Conflict` | Duplicate email or sample code, an invalid status transition, or a reading on a sample that is not `IN_TRANSIT` |
+
+---
+
+## Project structure
+
+```
+src/
+├── main.ts                       # Bootstrap, loads .env, validation, Swagger
+├── app.module.ts                 # Root module, Redis connection for BullMQ
+├── prisma/
+│   ├── prisma.module.ts          # Global module exposing PrismaService
+│   └── prisma.service.ts         # Shared Prisma client
+├── auth/
+│   ├── auth.controller.ts        # /auth endpoints
+│   ├── auth.service.ts           # Hashing, credential check, token issuing
+│   ├── auth.module.ts            # JWT configuration
+│   ├── jwt-auth.guard.ts         # Verifies the Bearer token
+│   ├── roles.guard.ts            # Checks @Roles() metadata against the user's role
+│   ├── roles.decorator.ts        # @Roles(...) decorator
+│   ├── auth-user.ts              # Shape of the token payload
+│   └── dto/                      # Register and login DTOs
+└── samples/
+    ├── samples.controller.ts     # /samples endpoints
+    ├── samples.service.ts        # Lifecycle, audit log, temperature rule, job scheduling
+    ├── state-machine.ts          # Allowed transitions and roles
+    ├── escalation.processor.ts   # BullMQ worker that creates escalation alerts
+    ├── alerts.controller.ts      # /alerts endpoint for auditors
+    ├── *.spec.ts                 # Unit tests
+    └── dto/                      # Create, transition and reading DTOs
+test/
+└── cold-chain.e2e-spec.ts        # End-to-end tests
+prisma/
+├── schema.prisma                 # Data model
+├── seed.ts                       # Demo data
+└── migrations/                   # SQL migrations
+.github/workflows/ci.yml          # GitHub Actions pipeline
+docker-compose.yml                # PostgreSQL (dev and test) and Redis
+```
+
+---
+
+## Design decisions
+
+- **Transactions for every status change.** The status update and its custody event are written together with `prisma.$transaction`, so a status can never change without an audit record, and an audit record never exists without the change.
+- **State machine as data.** Transitions and their allowed roles are a plain array. The service looks up the rule; it contains no transition-specific logic.
+- **Two layers of authorization.** `RolesGuard` protects whole endpoints (e.g. only nurses create samples), while the state machine decides per transition who may act.
+- **Escalation re-checks the current state.** The delayed job does not assume the sample is still in transit; the worker reloads it and only raises an alert if it is. Each job also has a fixed id (`transit-<sampleId>`), so the same sample cannot be scheduled twice.
+- **Automatic events have no actor.** `actorId` is nullable because a `COMPROMISED` status is decided by the system, not by a user.
+- **Passwords are never stored or returned.** Passwords are hashed with bcrypt (cost 10), and user queries select only safe fields.
+- **Generic login errors.** Login returns the same `Invalid credentials` message for an unknown email and a wrong password, to avoid revealing which emails are registered.
+
+---
+
+## Roadmap
+
+- [x] Unit and end-to-end tests with Jest
+- [x] Swagger / OpenAPI documentation
+- [x] GitHub Actions CI running the test suite on every push
+- [x] Time-based escalation with BullMQ and Redis
+- [x] Live deployment
+- [ ] Restrict role assignment at registration to an admin
+- [ ] Optimistic locking for concurrent status changes on the same sample
+- [ ] Pagination and filtering on `GET /samples`
+
+---
+
+## Author
+
+**Eleni Tsitoni**, Electrical and Computer Engineering, University of Thessaly
